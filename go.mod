@@ -1,4 +1,4 @@
-module mvnparser
+module github.com/chriskaliX/mvnparser
 
 go 1.14
 
