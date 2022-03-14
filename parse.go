@@ -2,6 +2,8 @@ package mvnparse
 
 import (
 	"encoding/xml"
+	"fmt"
+	"github.com/elliotchance/orderedmap"
 	"io"
 	"io/ioutil"
 	"os"
@@ -77,7 +79,7 @@ func (p *Project) ToXML(path string) error {
 }
 
 type Properties struct {
-	Entries map[string]string
+	Entries orderedmap.OrderedMap
 }
 
 // Configuration should be a DOM
@@ -170,7 +172,9 @@ func (c *Configuration) MarshalXML(e *xml.Encoder, start xml.StartElement) error
 
 func (p *Properties) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	tokens := []xml.Token{start}
-	for key, value := range p.Entries {
+	for ele := p.Entries.Front(); ele != nil; ele = ele.Next() {
+		key := fmt.Sprint(ele.Key)
+		value := fmt.Sprint(ele.Value)
 		t := xml.StartElement{Name: xml.Name{Space: "", Local: key}}
 		tokens = append(tokens, t, xml.CharData(value), xml.EndElement{Name: t.Name})
 	}
@@ -191,10 +195,10 @@ func (p *Properties) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (err e
 		Value   string `xml:",chardata"`
 	}
 	e := entry{}
-	p.Entries = map[string]string{}
+	p.Entries = *orderedmap.NewOrderedMap()
 	for err = d.Decode(&e); err == nil; err = d.Decode(&e) {
 		e.Key = e.XMLName.Local
-		p.Entries[e.Key] = e.Value
+		p.Entries.Set(e.Key, e.Value)
 	}
 	if err != nil && err != io.EOF {
 		return err
