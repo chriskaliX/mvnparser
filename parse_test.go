@@ -1,49 +1,112 @@
 package mvnparse
 
 import (
-	"encoding/xml"
-	"github.com/elliotchance/orderedmap"
-	"strings"
-	"testing"
+    "encoding/xml"
+    "github.com/elliotchance/orderedmap"
+    "github.com/stretchr/testify/assert"
+    "github.com/subchen/go-xmldom"
+    "html"
+    "strings"
+    "testing"
 )
 
 func TestProperties_MarshalXML(t *testing.T) {
 
-	p := Properties{
-		Entries: *orderedmap.NewOrderedMap(),
-	}
-	p.Entries.Set("a", "1")
-	p.Entries.Set("b", "1")
-	p.Entries.Set("c", "1")
-	data, err := xml.Marshal(p)
-	if err != nil {
-		t.Error("properties marshal failed, ", err)
-		return
-	}
-
-	result := string(data)
-	if strings.Index(result, "b") < strings.Index(result, "a") {
-		t.Error("unexpected order for properties, ", result)
-		return
-	}
+    p := Properties{
+        Entries: *orderedmap.NewOrderedMap(),
+    }
+    p.Entries.Set("a", "1")
+    p.Entries.Set("b", "1")
+    p.Entries.Set("c", "1")
+    data, err := xml.Marshal(p)
+    assert.NoError(t, err)
+    result := string(data)
+    assert.True(t, strings.Index(result, "b") < strings.Index(result, "a"), "unexpected order for properties")
 }
 
 func TestProperties_UnmarshalXML(t *testing.T) {
-	data := "<properties><a>1</a><b>1</b><c>1</c></properties>"
-	p := Properties{}
-	err := xml.Unmarshal([]byte(data), &p)
-	if err != nil {
-		t.Error("properties unmarshal failed, ", err)
-		return
-	}
-	keys := p.Entries.Keys()
-	if len(keys) != 3 {
-		t.Error("mismatch count, exepect 3, got ", len(keys))
-		return
-	}
-	if keys[0] != "a" {
-		t.Error("unexpected order for properties", p)
-		return
-	}
+    data := "<properties><a>1</a><b>1</b><c>1</c></properties>"
+    p := Properties{}
+    err := xml.Unmarshal([]byte(data), &p)
+    assert.NoError(t, err)
+    keys := p.Entries.Keys()
+    assert.Len(t, keys, 3)
+    assert.Equal(t, "a", keys[0])
 }
 
+func makeAttribute(name string) *xmldom.Attribute {
+    return &xmldom.Attribute{
+        Name:  name,
+        Value: name,
+    }
+}
+
+func makeNode(name string) *xmldom.Node {
+    return &xmldom.Node{
+        Name: name,
+        Attributes: []*xmldom.Attribute{
+            makeAttribute("attr1"),
+            makeAttribute("attr2"),
+        },
+    }
+}
+
+func TestConfiguration_MarshalXML(t *testing.T) {
+    children := []*xmldom.Node{
+        makeNode("node1"),
+        makeNode("node2"),
+    }
+
+    config := Configuration{
+        XMLName: xml.Name{
+            Space: "",
+            Local: "configuration",
+        },
+        Children: children,
+    }
+    data, err := xml.Marshal(&config)
+    assert.NoError(t, err)
+    result := string(data)
+    result = html.UnescapeString(result)
+    assert.Contains(t, result, `<node1 attr1="attr1"`)
+    assert.Contains(t, result, `attr2="attr2"`)
+}
+
+func TestConfiguration_UnmarshalXML(t *testing.T) {
+    data := `<configuration>
+                <transformers>
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                    <resource>META-INF/spring.handlers</resource>
+                  </transformer>
+                  <transformer implementation="org.springframework.boot.maven.PropertiesMergingResourceTransformer">
+                    <resource>META-INF/spring.factories</resource>
+                  </transformer>
+                </transformers>
+            </configuration>`
+    var config Configuration
+    err := xml.Unmarshal([]byte(data), &config)
+    assert.NoError(t, err)
+
+    children := config.Children
+    assert.NotNil(t, children)
+    assert.Len(t, children, 1)
+
+    transforms := children[0]
+    assert.Equal(t, "transformers", transforms.Name)
+    assert.Len(t, transforms.Children, 2)
+
+    transform := transforms.Children[0]
+    assert.Equal(t, "transformer", transform.Name)
+    assert.Len(t, transform.Attributes, 1)
+
+    attr := transform.Attributes[0]
+    assert.Equal(t, "implementation", attr.Name)
+    assert.Equal(t, "org.apache.maven.plugins.shade.resource.AppendingTransformer", attr.Value)
+
+    resources := transform.Children
+    assert.Len(t, resources, 1)
+    resource := resources[0]
+    assert.Equal(t, "resource", resource.Name)
+    assert.Equal(t, "META-INF/spring.handlers", resource.Text)
+
+}
