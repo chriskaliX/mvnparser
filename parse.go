@@ -1,14 +1,19 @@
 package mvnparse
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"github.com/elliotchance/orderedmap"
+	"github.com/subchen/go-xmldom"
+	"html"
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/clbanning/mxj/v2"
+
 )
 
 func Parse(path string) (*Project, error) {
@@ -85,11 +90,86 @@ type Properties struct {
 // Configuration should be a DOM
 // maybe a Better way to do this
 type Configuration struct {
-	XMLName xml.Name `xml:"configuration"`
+	XMLName  xml.Name `xml:"configuration"`
+	Children []*xmldom.Node `xml:",chardata,omitempty"`
+	// Deprecated: use Children instead
 	Entries map[string]interface{}
 }
 
+// file origin: https://github.com/subchen/go-xmldom/blob/v1.1.2/dom.go
+// use node list to store configure Children elements
+func toNodes(d *xml.Decoder) ([]*xmldom.Node, error) {
+	t, err := d.Token()
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]*xmldom.Node, 0)
+	var e *xmldom.Node
+	for t != nil {
+		switch token := t.(type) {
+		case xml.StartElement:
+			// a new node
+			el := new(xmldom.Node)
+			el.Parent = e
+			el.Name = token.Name.Local
+			for _, attr := range token.Attr {
+				el.Attributes = append(el.Attributes, &xmldom.Attribute{
+					Name:  attr.Name.Local,
+					Value: attr.Value,
+				})
+			}
+			if e != nil {
+				e.Children = append(e.Children, el)
+			} else {
+				nodes = append(nodes, el)
+			}
+			e = el
+		case xml.EndElement:
+			if e != nil {
+				e = e.Parent
+			}
+		case xml.CharData:
+			// text node
+			if e != nil {
+				e.Text = string(bytes.TrimSpace(token))
+			}
+		}
+		// get the next token
+		t, err = d.Token()
+	}
+
+	// Make sure that reading stopped on EOF
+	if err != io.EOF {
+		return nil, err
+	}
+
+	// All is good, return the node list
+	return nodes, nil
+}
+
+func stringifyProcInst(pi *xml.ProcInst) string {
+	if pi == nil {
+		return ""
+	}
+	return fmt.Sprintf("<?%s %s?>", pi.Target, string(pi.Inst))
+}
+
+func stringifyDirective(directive *xml.Directive) string {
+	if directive == nil {
+		return ""
+	}
+	return fmt.Sprintf("<!%s>", string(*directive))
+}
+
 func (c *Configuration) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (err error) {
+	// unmarshal to document
+	nodes, err := toNodes(d)
+	if err != nil {
+		return err
+	}
+	c.Children = nodes
+
+	//deprecated, unmarshl to map
 	var content map[string]interface{}
 
 	type entry struct {
@@ -147,27 +227,37 @@ func recursively(tokens []xml.Token, value interface{}) []xml.Token {
 }
 
 func (c *Configuration) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
-
-	tokens := []xml.Token{start}
-	for key, value := range c.Entries {
-		// tokens begin
-		tokens = append(tokens, xml.StartElement{Name: xml.Name{Space: "", Local: key}})
-
-		tokens = recursively(tokens, value)
-		// tokens end
-		tokens = append(tokens, xml.EndElement{Name: xml.Name{Space: "", Local: key}})
+	// directly change sub dom into xml string, use chardata for token
+	childrenList := make([]string, 0)
+	for _, node := range c.Children {
+		childrenList = append(childrenList, html.UnescapeString(node.XML()))
 	}
-
-	// tokens end
-	tokens = append(tokens, xml.EndElement{Name: start.Name})
-	for _, t := range tokens {
-		err := e.EncodeToken(t)
-		if err != nil {
-			return err
-		}
+	token := xml.CharData([]byte(strings.Join(childrenList, "\n")))
+	err := e.EncodeToken(token)
+	if err != nil {
+		return err
 	}
-
 	return e.Flush()
+
+	//tokens := []xml.Token{start}
+	//for key, value := range c.Entries {
+	//	// tokens begin
+	//	tokens = append(tokens, xml.StartElement{Name: xml.Name{Space: "", Local: key}})
+	//
+	//	tokens = recursively(tokens, value)
+	//	// tokens end
+	//	tokens = append(tokens, xml.EndElement{Name: xml.Name{Space: "", Local: key}})
+	//}
+	//
+	//// tokens end
+	//tokens = append(tokens, xml.EndElement{Name: start.Name})
+	//for _, t := range tokens {
+	//	err := e.EncodeToken(t)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+	//return e.Flush()
 }
 
 func (p *Properties) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
