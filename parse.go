@@ -4,17 +4,23 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"github.com/clbanning/mxj/v2"
 	"github.com/elliotchance/orderedmap"
 	"github.com/subchen/go-xmldom"
 	"html"
 	"io"
 	"io/ioutil"
 	"os"
-	"strings"
-
-	"github.com/clbanning/mxj/v2"
-
 )
+
+func ParseStr(xmlStr string) (*Project, error) {
+	var project Project
+	err := xml.Unmarshal([]byte(xmlStr), &project)
+	if err != nil {
+		return nil, err
+	}
+	return &project, nil
+}
 
 func Parse(path string) (*Project, error) {
 	file, err := os.Open(path)
@@ -34,7 +40,7 @@ func Parse(path string) (*Project, error) {
 }
 
 type Project struct {
-	// Attributes             []xml.Attr             `xml:",any,attr"`
+	//Attrs             []xml.Attr             `xml:",any,attr,omitempty"`
 	XMLName                xml.Name                `xml:"project,omitempty"`
 	ModelVersion           string                  `xml:"modelVersion,omitempty"`
 	Parent                 *Parent                 `xml:"parent,omitempty"`
@@ -67,16 +73,24 @@ type Project struct {
 	Properties             *Properties             `xml:"properties,omitempty"`
 }
 
-func (p *Project) ToXML(path string) error {
+func (p *Project) ToXMLStr() (string, error) {
 	const (
 		Header = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
 	)
 	data, err := xml.MarshalIndent(&p, "", "\t")
 	if err != nil {
+		return "", err
+	}
+	result := Header + html.UnescapeString(string(data))
+	return result, nil
+}
+
+func (p *Project) ToXML(path string) error {
+	dataStr, err := p.ToXMLStr()
+	if err != nil {
 		return err
 	}
-	result := Header + string(data)
-	err = ioutil.WriteFile(path, []byte(result), 0644)
+	err = ioutil.WriteFile(path, []byte(dataStr), 0644)
 	if err != nil {
 		return err
 	}
@@ -91,7 +105,7 @@ type Properties struct {
 // maybe a Better way to do this
 type Configuration struct {
 	XMLName  xml.Name `xml:"configuration"`
-	Children []*xmldom.Node `xml:",chardata,omitempty"`
+	Children []*xmldom.Node
 	// Deprecated: use Children instead
 	Entries map[string]interface{}
 }
@@ -147,18 +161,43 @@ func toNodes(d *xml.Decoder) ([]*xmldom.Node, error) {
 	return nodes, nil
 }
 
-func stringifyProcInst(pi *xml.ProcInst) string {
-	if pi == nil {
-		return ""
+func nodeToTokens(node *xmldom.Node) ([]xml.Token,error) {
+	tokens := make([]xml.Token, 0)
+	attrs := make([]xml.Attr, 0)
+	if node.Attributes != nil {
+		for _, attr := range node.Attributes {
+			attrs = append(attrs, xml.Attr{
+				Name:  xml.Name{
+					Space: "",
+					Local: attr.Name,
+				},
+				Value: attr.Value,
+			})
+		}
 	}
-	return fmt.Sprintf("<?%s %s?>", pi.Target, string(pi.Inst))
-}
-
-func stringifyDirective(directive *xml.Directive) string {
-	if directive == nil {
-		return ""
+	tokens = append(tokens, xml.StartElement{
+		Name: xml.Name{Space: "", Local: node.Name},
+		Attr: attrs,
+	})
+	if node.Children != nil {
+		for _, subNode := range node.Children {
+			subTokens, err := nodeToTokens(subNode)
+			if err != nil {
+				return nil, err
+			}
+			tokens = append(tokens, subTokens...)
+		}
 	}
-	return fmt.Sprintf("<!%s>", string(*directive))
+	if node.Text != "" {
+		tokens = append(tokens, xml.CharData([]byte(node.Text)))
+	}
+	tokens = append(tokens, xml.EndElement{
+		Name: xml.Name{
+			Space: "",
+			Local: node.Name,
+		},
+	})
+	return tokens, nil
 }
 
 func (c *Configuration) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (err error) {
@@ -228,14 +267,20 @@ func recursively(tokens []xml.Token, value interface{}) []xml.Token {
 
 func (c *Configuration) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	// directly change sub dom into xml string, use chardata for token
-	childrenList := make([]string, 0)
+	tokens := []xml.Token{start}
 	for _, node := range c.Children {
-		childrenList = append(childrenList, html.UnescapeString(node.XML()))
+		childTokens, err := nodeToTokens(node)
+		if err != nil {
+			return err
+		}
+		tokens = append(tokens, childTokens...)
 	}
-	token := xml.CharData([]byte(strings.Join(childrenList, "\n")))
-	err := e.EncodeToken(token)
-	if err != nil {
-		return err
+	tokens = append(tokens, xml.EndElement{Name: start.Name})
+	for _, token := range tokens {
+		err := e.EncodeToken(token)
+			if err != nil {
+			return err
+		}
 	}
 	return e.Flush()
 

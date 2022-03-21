@@ -56,6 +56,7 @@ func TestConfiguration_MarshalXML(t *testing.T) {
         makeNode("node1"),
         makeNode("node2"),
     }
+    children[1].Text = "yyyy-MM-dd'T'HH:mm:ssZ"
 
     config := Configuration{
         XMLName: xml.Name{
@@ -66,10 +67,10 @@ func TestConfiguration_MarshalXML(t *testing.T) {
     }
     data, err := xml.Marshal(&config)
     assert.NoError(t, err)
-    result := string(data)
-    result = html.UnescapeString(result)
+    result := html.UnescapeString(string(data))
     assert.Contains(t, result, `<node1 attr1="attr1"`)
     assert.Contains(t, result, `attr2="attr2"`)
+    assert.Contains(t, result, `yyyy-MM-dd'T'HH:mm:ssZ`)
 }
 
 func TestConfiguration_UnmarshalXML(t *testing.T) {
@@ -82,6 +83,7 @@ func TestConfiguration_UnmarshalXML(t *testing.T) {
                     <resource>META-INF/spring.factories</resource>
                   </transformer>
                 </transformers>
+                <test>yyyy-MM-dd'T'HH:mm:ssZ</test>
             </configuration>`
     var config Configuration
     err := xml.Unmarshal([]byte(data), &config)
@@ -89,7 +91,7 @@ func TestConfiguration_UnmarshalXML(t *testing.T) {
 
     children := config.Children
     assert.NotNil(t, children)
-    assert.Len(t, children, 1)
+    assert.Len(t, children, 2)
 
     transforms := children[0]
     assert.Equal(t, "transformers", transforms.Name)
@@ -109,4 +111,7 @@ func TestConfiguration_UnmarshalXML(t *testing.T) {
     assert.Equal(t, "resource", resource.Name)
     assert.Equal(t, "META-INF/spring.handlers", resource.Text)
 
+    test := children[1]
+    assert.NotNil(t, test)
+    assert.Equal(t, "yyyy-MM-dd'T'HH:mm:ssZ", test.Text)
 }
